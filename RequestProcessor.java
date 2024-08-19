@@ -29,9 +29,26 @@ public class RequestProcessor implements Runnable {
 
             String host = null;
             String line;
+            
+            String requestLine = reader.readLine();
+            logger.info(socket.getRemoteSocketAddress() + " " + requestLine);
+            
+//            StringBuilder requestLine = new StringBuilder();
+//            while (true) {
+//                int c = reader.read();
+//                if (c == '\r' || c == '\n') break;
+//                requestLine.append((char) c);
+//            }
+            String[] tokens = requestLine.split("\\s+");
+            String method = tokens[0];
+            String version = tokens.length > 2 ? tokens[2] : "";
+            
             while (!(line = reader.readLine()).isEmpty()) {
                 if (line.startsWith("Host:")) {
                     host = line.split(" ")[1].trim();
+                    if (host.contains(":")) {
+                        host = host.split(":")[0];
+                    }
                     break;
                 }
             }
@@ -45,23 +62,12 @@ public class RequestProcessor implements Runnable {
             if (rootDirectory == null) {
                 // Default root directory is not set, handle error
                 String body = "<HTML><HEAD><TITLE>Server Error</TITLE></HEAD><BODY><H1>HTTP Error 500: Internal Server Error</H1></BODY></HTML>";
-                writer.write("HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: " + body.length() + "\r\n\r\n");
+                writer.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: " + body.length() + "\r\n\r\n");
                 writer.write(body);
                 writer.flush();
                 return;
             }
             
-            StringBuilder requestLine = new StringBuilder();
-            while (true) {
-                int c = reader.read();
-                if (c == '\r' || c == '\n') break;
-                requestLine.append((char) c);
-            }
-            String get = requestLine.toString();
-            logger.info(socket.getRemoteSocketAddress() + " " + get);
-            String[] tokens = get.split("\\s+");
-            String method = tokens[0];
-            String version = "";
             if (method.equals("GET")) {
                 String fileName = tokens[1];
                 if (fileName.endsWith("/")) fileName += indexFileName;
@@ -69,11 +75,13 @@ public class RequestProcessor implements Runnable {
                 if (tokens.length > 2) {
                     version = tokens[2];
                 }
+                
                 File theFile = new File(rootDirectory, fileName.substring(1));
-                if (theFile.canRead() && theFile.getCanonicalPath().startsWith(rootDirectory.getPath())) {
-                    byte[] theData = Files.readAllBytes(theFile.toPath());
+                
+                if (theFile.canRead() && theFile.getCanonicalPath().startsWith(rootDirectory.getCanonicalPath())) {
+                	byte[] theData = Files.readAllBytes(theFile.toPath());
                     if (version.startsWith("HTTP/")) { // send a MIME header
-                        sendHeader(writer, "HTTP/1.0 200 OK", contentType, theData.length);
+                        sendHeader(writer, "HTTP/1.1 200 OK", contentType, theData.length);
                     }
                     rawOut.write(theData);
                     rawOut.flush();
@@ -81,7 +89,7 @@ public class RequestProcessor implements Runnable {
                     // File not found
                     String body = "<HTML><HEAD><TITLE>File Not Found</TITLE></HEAD><BODY><H1>HTTP Error 404: File Not Found</H1></BODY></HTML>";
                     if (version.startsWith("HTTP/")) {
-                        sendHeader(writer, "HTTP/1.0 404 File Not Found", "text/html; charset=utf-8", body.length());
+                        sendHeader(writer, "HTTP/1.1 404 File Not Found", "text/html; charset=utf-8", body.length());
                     }
                     writer.write(body);
                     writer.flush();
@@ -90,7 +98,7 @@ public class RequestProcessor implements Runnable {
                 // Method not supported
                 String body = "<HTML><HEAD><TITLE>Not Implemented</TITLE></HEAD><BODY><H1>HTTP Error 501: Not Implemented</H1></BODY></HTML>";
                 if (version.startsWith("HTTP/")) {
-                    sendHeader(writer, "HTTP/1.0 501 Not Implemented", "text/html; charset=utf-8", body.length());
+                    sendHeader(writer, "HTTP/1.1 501 Not Implemented", "text/html; charset=utf-8", body.length());
                 }
                 writer.write(body);
                 writer.flush();
@@ -113,6 +121,7 @@ public class RequestProcessor implements Runnable {
         out.write("Server: JHTTP 2.0\r\n");
         out.write("Content-length: " + length + "\r\n");
         out.write("Content-type: " + contentType + "\r\n\r\n");
+//        out.write("Connection: close\r\n");
         out.flush();
     }
 
