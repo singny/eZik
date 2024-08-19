@@ -37,6 +37,7 @@ public class RequestProcessor implements Runnable {
             }
 
             File rootDirectory = virtualHosts.get(host);
+            
             if (rootDirectory == null) {
                 rootDirectory = virtualHosts.get("default");
             }
@@ -49,7 +50,7 @@ public class RequestProcessor implements Runnable {
                 writer.flush();
                 return;
             }
-
+            
             StringBuilder requestLine = new StringBuilder();
             while (true) {
                 int c = reader.read();
@@ -113,5 +114,21 @@ public class RequestProcessor implements Runnable {
         out.write("Content-length: " + length + "\r\n");
         out.write("Content-type: " + contentType + "\r\n\r\n");
         out.flush();
+    }
+
+    public static void printVirtualHosts(Map<String, File> virtualHosts) {
+        if (virtualHosts == null || virtualHosts.isEmpty()) {
+            logger.info("The virtualHosts map is empty.");
+            return;
+        }
+
+        logger.info("Virtual Hosts Configuration:");
+        for (Map.Entry<String, File> entry : virtualHosts.entrySet()) {
+            String host = entry.getKey();
+            File directory = entry.getValue();
+            String path = (directory != null) ? directory.getAbsolutePath() : "null";
+
+            logger.info("Host: " + host + " -> Directory: " + path);
+        }
     }
 }
