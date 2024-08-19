@@ -1,10 +1,11 @@
 package full;
 
-
 import java.io.File;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
@@ -17,15 +18,11 @@ public class HttpServer {
     private static final Logger logger = Logger.getLogger(HttpServer.class.getCanonicalName());
     private static final int NUM_THREADS = 50;
     private static final String INDEX_FILE = "index.html";
-ㅋ    private final File rootDirectory;
+    private final Map<String, File> virtualHosts;
     private final int port;
 
-    public HttpServer(File rootDirectory, int port) throws IOException {
-        if (!rootDirectory.isDirectory()) {
-            throw new IOException(rootDirectory
-                    + " does not exist as a directory");
-        }
-        this.rootDirectory = rootDirectory;
+    public HttpServer(Map<String, File> virtualHosts, int port) throws IOException {
+        this.virtualHosts = virtualHosts;
         this.port = port;
     }
 
@@ -33,11 +30,10 @@ public class HttpServer {
         ExecutorService pool = Executors.newFixedThreadPool(NUM_THREADS);
         try (ServerSocket server = new ServerSocket(port)) {
             logger.info("Accepting connections on port " + server.getLocalPort());
-            logger.info("Document Root: " + rootDirectory);
             while (true) {
                 try {
                     Socket request = server.accept();
-                    Runnable r = new RequestProcessor(rootDirectory, INDEX_FILE, request);
+                    Runnable r = new RequestProcessor(virtualHosts, INDEX_FILE, request);
                     pool.submit(r);
                 } catch (IOException ex) {
                     logger.log(Level.WARNING, "Error accepting connection", ex);
@@ -47,24 +43,22 @@ public class HttpServer {
     }
 
     public static void main(String[] args) {
-        // get the Document root
-        File docroot;
-        try {
-            docroot = new File(args[0]);
-        } catch (ArrayIndexOutOfBoundsException ex) {
-            System.out.println("Usage: java JHTTP docroot port");
-            return;
-        }
+        Map<String, File> virtualHosts = new HashMap<>();
+        
+        // 호스트별 루트 디렉터리를 설정합니다.
+        virtualHosts.put("a.com", new File("/path/to/a_com_root"));
+        virtualHosts.put("b.com", new File("/path/to/b_com_root"));
+        
         // set the port to listen on
         int port;
         try {
-            port = Integer.parseInt(args[1]);
+            port = Integer.parseInt(args[0]);
             if (port < 0 || port > 65535) port = 80;
         } catch (RuntimeException ex) {
             port = 80;
         }
         try {
-            HttpServer webserver = new HttpServer(docroot, port);
+            HttpServer webserver = new HttpServer(virtualHosts, port);
             webserver.start();
         } catch (IOException ex) {
             logger.log(Level.SEVERE, "Server could not start", ex);
