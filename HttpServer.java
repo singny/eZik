@@ -52,7 +52,7 @@ public class HttpServer {
         
         // set the port to listen on
 //        int port;
-        int port = 9996;
+        int port = 8080;
 //        try {
 //            port = Integer.parseInt(args[0]);
 //            if (port < 0 || port > 65535) port = 80;
