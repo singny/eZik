@@ -7,109 +7,105 @@ import java.nio.file.Files;
 import java.util.Date;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.Map;
 
 public class RequestProcessor implements Runnable {
     private final static Logger logger = Logger.getLogger(RequestProcessor.class.getCanonicalName());
-    private File rootDirectory;
-    private String indexFileName = "index.html";
-    private Socket connection;
+    private final Map<String, File> virtualHosts;
+    private final String indexFileName;
+    private final Socket socket;
 
-    public RequestProcessor(File rootDirectory, String indexFileName, Socket connection) {
-        if (rootDirectory.isFile()) {
-            throw new IllegalArgumentException(
-                    "rootDirectory must be a directory, not a file");
-        }
-        try {
-            rootDirectory = rootDirectory.getCanonicalFile();
-        } catch (IOException ex) {
-        }
-        this.rootDirectory = rootDirectory;
-        if (indexFileName != null)
-            this.indexFileName = indexFileName;
-        this.connection = connection;
+    public RequestProcessor(Map<String, File> virtualHosts, String indexFileName, Socket socket) {
+        this.virtualHosts = virtualHosts;
+        this.indexFileName = indexFileName;
+        this.socket = socket;
     }
 
     @Override
     public void run() {
-        // for security checks
-        String root = rootDirectory.getPath();
-        try {
-            OutputStream raw = new BufferedOutputStream(connection.getOutputStream());
-            Writer out = new OutputStreamWriter(raw);
-            Reader in = new InputStreamReader(new BufferedInputStream(connection.getInputStream()), "UTF-8");
+        try (OutputStream rawOut = socket.getOutputStream()) {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            OutputStreamWriter writer = new OutputStreamWriter(rawOut);
+
+            String host = null;
+            String line;
+            while (!(line = reader.readLine()).isEmpty()) {
+                if (line.startsWith("Host:")) {
+                    host = line.split(" ")[1].trim();
+                    break;
+                }
+            }
+
+            File rootDirectory = virtualHosts.get(host);
+            if (rootDirectory == null) {
+                rootDirectory = virtualHosts.get("default");
+            }
+            
+            if (rootDirectory == null) {
+                // Default root directory is not set, handle error
+                String body = "<HTML><HEAD><TITLE>Server Error</TITLE></HEAD><BODY><H1>HTTP Error 500: Internal Server Error</H1></BODY></HTML>";
+                writer.write("HTTP/1.0 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: " + body.length() + "\r\n\r\n");
+                writer.write(body);
+                writer.flush();
+                return;
+            }
+
             StringBuilder requestLine = new StringBuilder();
             while (true) {
-                int c = in.read();
-                if (c == '\r' || c == '\n')
-                    break;
+                int c = reader.read();
+                if (c == '\r' || c == '\n') break;
                 requestLine.append((char) c);
             }
             String get = requestLine.toString();
-            logger.info(connection.getRemoteSocketAddress() + " " + get);
+            logger.info(socket.getRemoteSocketAddress() + " " + get);
             String[] tokens = get.split("\\s+");
             String method = tokens[0];
             String version = "";
             if (method.equals("GET")) {
                 String fileName = tokens[1];
                 if (fileName.endsWith("/")) fileName += indexFileName;
-                String contentType =
-                        URLConnection.getFileNameMap().getContentTypeFor(fileName);
+                String contentType = URLConnection.getFileNameMap().getContentTypeFor(fileName);
                 if (tokens.length > 2) {
                     version = tokens[2];
                 }
-                File theFile = new File(rootDirectory, fileName.substring(1, fileName.length()));
-                if (theFile.canRead()
-// Don't let clients outside the document root
-                        && theFile.getCanonicalPath().startsWith(root)) {
+                File theFile = new File(rootDirectory, fileName.substring(1));
+                if (theFile.canRead() && theFile.getCanonicalPath().startsWith(rootDirectory.getPath())) {
                     byte[] theData = Files.readAllBytes(theFile.toPath());
                     if (version.startsWith("HTTP/")) { // send a MIME header
-                        sendHeader(out, "HTTP/1.0 200 OK", contentType, theData.length);
+                        sendHeader(writer, "HTTP/1.0 200 OK", contentType, theData.length);
                     }
-                    // send the file; it may be an image or other binary data
-                    // so use the underlying output stream
-                    // instead of the writer
-                    raw.write(theData);
-                    raw.flush();
+                    rawOut.write(theData);
+                    rawOut.flush();
                 } else {
-                    // can't find the file
-                    String body = new StringBuilder("<HTML>\r\n")
-                            .append("<HEAD><TITLE>File Not Found</TITLE>\r\n")
-                            .append("</HEAD>\r\n")
-                            .append("<BODY>")
-                            .append("<H1>HTTP Error 404: File Not Found</H1>\r\n")
-                            .append("</BODY></HTML>\r\n")
-                            .toString();
-                    if (version.startsWith("HTTP/")) { // send a MIME header
-                        sendHeader(out, "HTTP/1.0 404 File Not Found", "text/html; charset=utf-8", body.length());
+                    // File not found
+                    String body = "<HTML><HEAD><TITLE>File Not Found</TITLE></HEAD><BODY><H1>HTTP Error 404: File Not Found</H1></BODY></HTML>";
+                    if (version.startsWith("HTTP/")) {
+                        sendHeader(writer, "HTTP/1.0 404 File Not Found", "text/html; charset=utf-8", body.length());
                     }
-                    out.write(body);
-                    out.flush();
+                    writer.write(body);
+                    writer.flush();
                 }
             } else {
-                // method does not equal "GET"
-                String body = new StringBuilder("<HTML>\r\n").append("<HEAD><TITLE>Not Implemented</TITLE>\r\n").append("</HEAD>\r\n")
-                        .append("<BODY>")
-                        .append("<H1>HTTP Error 501: Not Implemented</H1>\r\n")
-                        .append("</BODY></HTML>\r\n").toString();
-                if (version.startsWith("HTTP/")) { // send a MIME header
-                    sendHeader(out, "HTTP/1.0 501 Not Implemented",
-                            "text/html; charset=utf-8", body.length());
+                // Method not supported
+                String body = "<HTML><HEAD><TITLE>Not Implemented</TITLE></HEAD><BODY><H1>HTTP Error 501: Not Implemented</H1></BODY></HTML>";
+                if (version.startsWith("HTTP/")) {
+                    sendHeader(writer, "HTTP/1.0 501 Not Implemented", "text/html; charset=utf-8", body.length());
                 }
-                out.write(body);
-                out.flush();
+                writer.write(body);
+                writer.flush();
             }
         } catch (IOException ex) {
-            logger.log(Level.WARNING, "Error talking to " + connection.getRemoteSocketAddress(), ex);
+            logger.log(Level.WARNING, "Error talking to " + socket.getRemoteSocketAddress(), ex);
         } finally {
             try {
-                connection.close();
+                socket.close();
             } catch (IOException ex) {
+                logger.log(Level.WARNING, "Error closing socket", ex);
             }
         }
     }
 
-    private void sendHeader(Writer out, String responseCode, String contentType, int length)
-            throws IOException {
+    private void sendHeader(Writer out, String responseCode, String contentType, int length) throws IOException {
         out.write(responseCode + "\r\n");
         Date now = new Date();
         out.write("Date: " + now + "\r\n");
