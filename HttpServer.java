@@ -46,17 +46,20 @@ public class HttpServer {
         Map<String, File> virtualHosts = new HashMap<>();
         
         // 호스트별 루트 디렉터리를 설정합니다.
-        virtualHosts.put("a.com", new File("/path/to/a_com_root"));
-        virtualHosts.put("b.com", new File("/path/to/b_com_root"));
+        virtualHosts.put("a.com", new File("a_com_root"));
+        virtualHosts.put("b.com", new File("b_com_root"));
+        virtualHosts.put("default", new File("a_com_root"));
         
         // set the port to listen on
-        int port;
-        try {
-            port = Integer.parseInt(args[0]);
-            if (port < 0 || port > 65535) port = 80;
-        } catch (RuntimeException ex) {
-            port = 80;
-        }
+//        int port;
+        int port = 9996;
+//        try {
+//            port = Integer.parseInt(args[0]);
+//            if (port < 0 || port > 65535) port = 80;
+//        } catch (RuntimeException ex) {
+//            port = 80;
+//        }
+     
         try {
             HttpServer webserver = new HttpServer(virtualHosts, port);
             webserver.start();
