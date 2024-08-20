@@ -5,17 +5,17 @@ import java.net.Socket;
 import java.net.URLConnection;
 import java.nio.file.Files;
 import java.util.Date;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.Map;
 
 public class RequestProcessor implements Runnable {
-    private final static Logger logger = Logger.getLogger(RequestProcessor.class.getCanonicalName());
-    private final Map<String, File> virtualHosts;
+    private static final Logger logger = Logger.getLogger(RequestProcessor.class.getCanonicalName());
+    private final Map<String, ServerConfig.HostConfig> virtualHosts;
     private final String indexFileName;
     private final Socket socket;
 
-    public RequestProcessor(Map<String, File> virtualHosts, String indexFileName, Socket socket) {
+    public RequestProcessor(Map<String, ServerConfig.HostConfig> virtualHosts, String indexFileName, Socket socket) {
         this.virtualHosts = virtualHosts;
         this.indexFileName = indexFileName;
         this.socket = socket;
@@ -31,18 +31,12 @@ public class RequestProcessor implements Runnable {
             String line;
             
             String requestLine = reader.readLine();
-            logger.info(socket.getRemoteSocketAddress() + " " + requestLine);
-            
-//            StringBuilder requestLine = new StringBuilder();
-//            while (true) {
-//                int c = reader.read();
-//                if (c == '\r' || c == '\n') break;
-//                requestLine.append((char) c);
-//            }
+//            logger.info(socket.getRemoteSocketAddress() + " " + requestLine);
+
             String[] tokens = requestLine.split("\\s+");
             String method = tokens[0];
             String version = tokens.length > 2 ? tokens[2] : "";
-            
+
             while (!(line = reader.readLine()).isEmpty()) {
                 if (line.startsWith("Host:")) {
                     host = line.split(" ")[1].trim();
@@ -53,55 +47,34 @@ public class RequestProcessor implements Runnable {
                 }
             }
 
-            File rootDirectory = virtualHosts.get(host);
-            
-            if (rootDirectory == null) {
-                rootDirectory = virtualHosts.get("default");
-            }
-            
-            if (rootDirectory == null) {
-                // Default root directory is not set, handle error
-                String body = "<HTML><HEAD><TITLE>Server Error</TITLE></HEAD><BODY><H1>HTTP Error 500: Internal Server Error</H1></BODY></HTML>";
-                writer.write("HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/html\r\nContent-Length: " + body.length() + "\r\n\r\n");
-                writer.write(body);
-                writer.flush();
+            ServerConfig.HostConfig hostConfig = virtualHosts.getOrDefault(host, virtualHosts.get("default"));
+
+            if (hostConfig == null || hostConfig.rootDirectory == null) {
+                sendErrorPage(writer, rawOut, 500, version, hostConfig);
                 return;
             }
-            
+
+            File rootDirectory = new File(hostConfig.rootDirectory);
+
             if (method.equals("GET")) {
                 String fileName = tokens[1];
                 if (fileName.endsWith("/")) fileName += indexFileName;
                 String contentType = URLConnection.getFileNameMap().getContentTypeFor(fileName);
-                if (tokens.length > 2) {
-                    version = tokens[2];
-                }
-                
+
                 File theFile = new File(rootDirectory, fileName.substring(1));
-                
+
                 if (theFile.canRead() && theFile.getCanonicalPath().startsWith(rootDirectory.getCanonicalPath())) {
-                	byte[] theData = Files.readAllBytes(theFile.toPath());
-                    if (version.startsWith("HTTP/")) { // send a MIME header
+                    byte[] theData = Files.readAllBytes(theFile.toPath());
+                    if (version.startsWith("HTTP/")) {
                         sendHeader(writer, "HTTP/1.1 200 OK", contentType, theData.length);
                     }
                     rawOut.write(theData);
                     rawOut.flush();
                 } else {
-                    // File not found
-                    String body = "<HTML><HEAD><TITLE>File Not Found</TITLE></HEAD><BODY><H1>HTTP Error 404: File Not Found</H1></BODY></HTML>";
-                    if (version.startsWith("HTTP/")) {
-                        sendHeader(writer, "HTTP/1.1 404 File Not Found", "text/html; charset=utf-8", body.length());
-                    }
-                    writer.write(body);
-                    writer.flush();
+                    sendErrorPage(writer, rawOut, 404, version, hostConfig);
                 }
             } else {
-                // Method not supported
-                String body = "<HTML><HEAD><TITLE>Not Implemented</TITLE></HEAD><BODY><H1>HTTP Error 501: Not Implemented</H1></BODY></HTML>";
-                if (version.startsWith("HTTP/")) {
-                    sendHeader(writer, "HTTP/1.1 501 Not Implemented", "text/html; charset=utf-8", body.length());
-                }
-                writer.write(body);
-                writer.flush();
+                sendErrorPage(writer, rawOut, 501, version, hostConfig);
             }
         } catch (IOException ex) {
             logger.log(Level.WARNING, "Error talking to " + socket.getRemoteSocketAddress(), ex);
@@ -121,23 +94,27 @@ public class RequestProcessor implements Runnable {
         out.write("Server: JHTTP 2.0\r\n");
         out.write("Content-length: " + length + "\r\n");
         out.write("Content-type: " + contentType + "\r\n\r\n");
-//        out.write("Connection: close\r\n");
         out.flush();
     }
 
-    public static void printVirtualHosts(Map<String, File> virtualHosts) {
-        if (virtualHosts == null || virtualHosts.isEmpty()) {
-            logger.info("The virtualHosts map is empty.");
-            return;
-        }
+    private void sendErrorPage(Writer writer, OutputStream rawOut, int errorCode, String version, ServerConfig.HostConfig hostConfig) throws IOException {
+        String errorPageFileName = hostConfig.errorPages.getOrDefault(errorCode, "500.html");
+        File errorFile = new File(hostConfig.rootDirectory, errorPageFileName);
 
-        logger.info("Virtual Hosts Configuration:");
-        for (Map.Entry<String, File> entry : virtualHosts.entrySet()) {
-            String host = entry.getKey();
-            File directory = entry.getValue();
-            String path = (directory != null) ? directory.getAbsolutePath() : "null";
-
-            logger.info("Host: " + host + " -> Directory: " + path);
+        if (errorFile.exists() && errorFile.canRead()) {
+            byte[] errorData = Files.readAllBytes(errorFile.toPath());
+            if (version.startsWith("HTTP/")) {
+                sendHeader(writer, "HTTP/1.1 " + errorCode + " Error", "text/html", errorData.length);
+            }
+            rawOut.write(errorData);
+            rawOut.flush();
+        } else {
+            String body = "<HTML><HEAD><TITLE>Error " + errorCode + "</TITLE></HEAD><BODY><H1>HTTP Error " + errorCode + "</H1></BODY></HTML>";
+            if (version.startsWith("HTTP/")) {
+                sendHeader(writer, "HTTP/1.1 " + errorCode + " Error", "text/html", body.length());
+            }
+            writer.write(body);
+            writer.flush();
         }
     }
 }
